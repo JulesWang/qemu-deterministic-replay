@@ -65,6 +65,9 @@
 
 static CPUState *next_cpu;
 
+extern int rr_mode;
+#define PAGE_SIZE TARGET_PAGE_SIZE
+
 bool cpu_is_stopped(CPUState *cpu)
 {
     return cpu->stopped || !runstate_is_running();
@@ -851,6 +854,7 @@ static void *qemu_kvm_cpu_thread_fn(void *arg)
 {
     CPUState *cpu = arg;
     int r;
+    struct kvm_rr rr;
 
     qemu_mutex_lock(&qemu_global_mutex);
     qemu_thread_get_self(cpu->thread);
@@ -869,6 +873,35 @@ static void *qemu_kvm_cpu_thread_fn(void *arg)
     cpu->created = true;
     qemu_cond_signal(&qemu_cpu_cond);
 
+    if (rr_mode == KVM_RECORD) {
+        cpu->f_d11c = qemu_fopen("deterministic.log", "wb");
+        cpu->f_n13c = qemu_fopen("nodeterministic.log", "wb");
+
+        rr.rr_mode = rr_mode;
+        rr.single_step = false;
+        rr.rdtsc_exit = true;
+        rr.enable_pmc = true;
+
+        kvm_vcpu_ioctl(cpu, KVM_RECORD_REPLAY_CTRL, &rr);
+    } else if (rr_mode == KVM_REPLAY) {
+        cpu->f_d11c = qemu_fopen("deterministic.log", "rb");
+        cpu->f_n13c = qemu_fopen("nodeterministic.log", "rb");
+
+        rr.rr_mode = rr_mode;
+        rr.single_step = false;
+        rr.rdtsc_exit = true;
+        rr.enable_pmc = true;
+
+        qemu_get_buffer(cpu->f_d11c, (uint8_t *)cpu->kvm_run + 3*PAGE_SIZE, PAGE_SIZE);
+        cpu->kvm_run->d11c_offset = 0;
+
+        qemu_get_buffer(cpu->f_n13c, (uint8_t *)cpu->kvm_run + 4*PAGE_SIZE, PAGE_SIZE);
+        cpu->kvm_run->n13c_offset = 0;
+
+        kvm_vcpu_ioctl(cpu, KVM_RECORD_REPLAY_CTRL, &rr);
+    }
+
+
     while (1) {
         if (cpu_can_run(cpu)) {
             r = kvm_cpu_exec(cpu);
@@ -877,6 +910,11 @@ static void *qemu_kvm_cpu_thread_fn(void *arg)
             }
         }
         qemu_kvm_wait_io_event(cpu);
+    }
+
+    if (rr_mode) {
+        qemu_fclose(cpu->f_d11c);
+        qemu_fclose(cpu->f_n13c);
     }
 
     return NULL;

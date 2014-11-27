@@ -172,6 +172,8 @@ struct kvm_pit_config {
 #define KVM_EXIT_S390_TSCH        22
 #define KVM_EXIT_EPR              23
 #define KVM_EXIT_SYSTEM_EVENT     24
+#define KVM_EXIT_SYNC_LOG         26
+
 
 /* For KVM_EXIT_INTERNAL_ERROR */
 /* Emulate instruction failed. */
@@ -180,6 +182,21 @@ struct kvm_pit_config {
 #define KVM_INTERNAL_ERROR_SIMUL_EX	2
 /* Encounter unexpected vm-exit due to delivery event. */
 #define KVM_INTERNAL_ERROR_DELIVERY_EV	3
+
+#define KVM_RECORD 1
+#define KVM_REPLAY 2
+
+struct kvm_timestamp {
+       __u64 rip;
+       __u64 rcx;
+       __u64 counter;
+};
+
+struct kvm_rr_intr {
+       __u32 vector;
+       struct kvm_timestamp timestamp;
+};
+
 
 /* for KVM_RUN, returned by mmap(vcpu_fd, offset=0) */
 struct kvm_run {
@@ -196,6 +213,13 @@ struct kvm_run {
 	/* in (pre_kvm_run), out (post_kvm_run) */
 	__u64 cr8;
 	__u64 apic_base;
+
+       struct kvm_rr_intr intr_to_inject;
+       __u64 rr_counter;
+
+       __u32 d11c_offset;
+       __u32 n13c_offset;
+
 
 #ifdef __KVM_S390
 	/* the processor status word for s390 */
@@ -1124,6 +1148,7 @@ struct kvm_s390_ucas_mapping {
 #define KVM_ARM_VCPU_INIT	  _IOW(KVMIO,  0xae, struct kvm_vcpu_init)
 #define KVM_ARM_PREFERRED_TARGET  _IOR(KVMIO,  0xaf, struct kvm_vcpu_init)
 #define KVM_GET_REG_LIST	  _IOWR(KVMIO, 0xb0, struct kvm_reg_list)
+#define KVM_RECORD_REPLAY_CTRL    _IOW(KVMIO,  0xb1, struct kvm_rr)
 
 #define KVM_DEV_ASSIGN_ENABLE_IOMMU	(1 << 0)
 #define KVM_DEV_ASSIGN_PCI_2_3		(1 << 1)
@@ -1173,6 +1198,13 @@ struct kvm_assigned_msix_entry {
 	__u32 gsi;
 	__u16 entry; /* The index of entry in the MSI-X table */
 	__u16 padding[3];
+};
+
+struct kvm_rr {
+       __u8 rr_mode;
+       __u8 single_step;
+       __u8 rdtsc_exit;
+       __u8 enable_pmc;
 };
 
 #endif /* __LINUX_KVM_H */

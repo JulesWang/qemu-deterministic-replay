@@ -118,6 +118,7 @@ int main(int argc, char **argv)
 #include "qapi/opts-visitor.h"
 #include "qom/object_interfaces.h"
 #include "qapi-event.h"
+#include "linux/kvm.h"
 
 #define DEFAULT_RAM_SIZE 128
 
@@ -201,6 +202,8 @@ NodeInfo numa_info[MAX_NODES];
 
 uint8_t qemu_uuid[16];
 bool qemu_uuid_set;
+
+int rr_mode = 0;
 
 static QEMUBootSetHandler *boot_set_handler;
 static void *boot_set_opaque;
@@ -3960,6 +3963,12 @@ int main(int argc, char **argv, char **envp)
                     fprintf(stderr, "open %s: %s\n", optarg, strerror(errno));
                     exit(1);
                 }
+                break;
+            case QEMU_OPTION_record:
+                rr_mode = KVM_RECORD;
+                break;
+            case QEMU_OPTION_replay:
+                rr_mode = KVM_REPLAY;
                 break;
             default:
                 os_parse_cmd_args(popt->index, optarg);

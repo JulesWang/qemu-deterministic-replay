@@ -63,6 +63,8 @@
 
 #define KVM_MSI_HASHTAB_SIZE    256
 
+extern int rr_mode;
+
 typedef struct KVMSlot
 {
     hwaddr start_addr;
@@ -127,6 +129,43 @@ static const KVMCapabilityInfo kvm_required_capabilites[] = {
     KVM_CAP_INFO(DESTROY_MEMORY_REGION_WORKS),
     KVM_CAP_LAST_INFO
 };
+
+static void kvm_rr_sync_log(QEMUFile *f_d11c, QEMUFile *f_n13c, struct kvm_run *run)
+{
+    int delta;
+    int done;
+
+    if (f_d11c && rr_mode == KVM_RECORD && run->d11c_offset) {
+        qemu_put_buffer(f_d11c, (uint8_t *)run + 3*PAGE_SIZE, run->d11c_offset);
+        run->d11c_offset = 0;
+    }
+    if (f_n13c && rr_mode == KVM_RECORD && run->n13c_offset) {
+        qemu_put_buffer(f_n13c, (uint8_t *)run + 4*PAGE_SIZE, run->n13c_offset);
+        run->n13c_offset = 0;
+    }
+
+    if (f_d11c && rr_mode == KVM_REPLAY && run->d11c_offset) {
+        delta = PAGE_SIZE - run->d11c_offset;
+        if (delta != 0)
+            memmove((uint8_t *)run + 3*PAGE_SIZE,
+                    (uint8_t *)run + 3*PAGE_SIZE + run->d11c_offset,
+                    delta);
+        qemu_get_buffer(f_d11c, (uint8_t *)run + 3*PAGE_SIZE + delta, run->d11c_offset);
+        run->d11c_offset = 0;
+    }
+    if (f_n13c && rr_mode == KVM_REPLAY && run->n13c_offset) {
+     delta = PAGE_SIZE - run->n13c_offset;
+     if (delta != 0)
+        memmove((uint8_t *)run + 4*PAGE_SIZE,
+                (uint8_t *)run + 4*PAGE_SIZE + run->n13c_offset,
+                delta);
+        done = qemu_get_buffer(f_n13c, (uint8_t *)run + 4*PAGE_SIZE + delta, run->n13c_offset);
+        if (done < run->n13c_offset) {
+            memset((uint8_t *)run + 4*PAGE_SIZE + delta + done, 0, run->n13c_offset - done);
+        }
+        run->n13c_offset = 0;
+    }
+}
 
 static KVMSlot *kvm_alloc_slot(KVMState *s)
 {
@@ -1727,10 +1766,39 @@ int kvm_cpu_exec(CPUState *cpu)
             abort();
         }
 
+        if(rr_mode) {
+            kvm_rr_sync_log(cpu->f_d11c, cpu->f_n13c, run);
+        }
+
+
         trace_kvm_run_exit(cpu->cpu_index, run->exit_reason);
         switch (run->exit_reason) {
         case KVM_EXIT_IO:
             DPRINTF("handle_io\n");
+
+            //input
+            if (cpu->f_d11c && !run->io.direction &&
+                !(run->io.port == 0x3da) &&  //hw/display/vga.c:436
+                rr_mode == KVM_REPLAY) {
+                       ret = 0;
+                       break;
+            }
+
+            //output
+            if (cpu->f_d11c && run->io.direction &&
+                !(run->io.port >= 0x1ce && run->io.port <= 0x1d0) && // hw/display/vga.c
+                !(run->io.port >= 0x3b0 && run->io.port <= 0x3da) &&
+                !(run->io.port >= 0xcf8 && run->io.port <= 0xcff) &&
+                !(run->io.port >= 0xc000 && run->io.port <= 0xc00f) && //pci
+                !(run->io.port == 0x402) &&
+                !(run->io.port >= 0x1f0 && run->io.port <= 0x1f7) &&  //IDE1
+                !(run->io.port >= 0x170 && run->io.port <= 0x177) &&  //IDE2
+                !(run->io.port == 0x3f6 || run->io.port == 0x376) &&
+                rr_mode == KVM_REPLAY) {
+                       ret = 0;
+                       break;
+            }
+
             kvm_handle_io(run->io.port,
                           (uint8_t *)run + run->io.data_offset,
                           run->io.direction,
@@ -1740,6 +1808,14 @@ int kvm_cpu_exec(CPUState *cpu)
             break;
         case KVM_EXIT_MMIO:
             DPRINTF("handle_mmio\n");
+
+            if (cpu->f_d11c && rr_mode == KVM_REPLAY &&
+                !(run->mmio.is_write && run->mmio.phys_addr >= 0xa0000 && run->mmio.phys_addr < 0xc0000 )
+               ) {
+                    ret = 0;
+                    break;
+            }
+
             cpu_physical_memory_rw(run->mmio.phys_addr,
                                    run->mmio.data,
                                    run->mmio.len,
@@ -1754,6 +1830,9 @@ int kvm_cpu_exec(CPUState *cpu)
             DPRINTF("shutdown\n");
             qemu_system_reset_request();
             ret = EXCP_INTERRUPT;
+            break;
+        case KVM_EXIT_SYNC_LOG:
+            ret = 0;
             break;
         case KVM_EXIT_UNKNOWN:
             fprintf(stderr, "KVM: unknown exit, hardware reason %" PRIx64 "\n",
@@ -1789,6 +1868,11 @@ int kvm_cpu_exec(CPUState *cpu)
     if (ret < 0) {
         cpu_dump_state(cpu, stderr, fprintf, CPU_DUMP_CODE);
         vm_stop(RUN_STATE_INTERNAL_ERROR);
+    }
+
+    if (rr_mode) {
+        qemu_fflush(cpu->f_d11c);
+        qemu_fflush(cpu->f_n13c);
     }
 
     cpu->exit_request = 0;

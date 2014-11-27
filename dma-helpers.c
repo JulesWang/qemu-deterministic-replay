@@ -12,8 +12,11 @@
 #include "qemu/range.h"
 #include "qemu/thread.h"
 #include "qemu/main-loop.h"
+#include "linux/kvm.h"
+#include "block/block_int.h"
 
 /* #define DEBUG_IOMMU */
+extern int rr_mode;
 
 int dma_memory_set(AddressSpace *as, dma_addr_t addr, uint8_t c, dma_addr_t len)
 {
@@ -116,6 +119,17 @@ static void dma_complete(DMAAIOCB *dbs, int ret)
 {
     trace_dma_complete(dbs, ret, dbs->common.cb);
 
+    if (rr_mode == KVM_RECORD && dbs->dir == DMA_DIRECTION_FROM_DEVICE) {
+        size_t len;
+        int i;
+        for (i = 0; i < dbs->iov.niov; ++i) {
+            len = dbs->iov.iov[i].iov_len;
+            qemu_put_buffer(dbs->bs->log, (uint8_t *)&len, sizeof len);
+            qemu_put_buffer(dbs->bs->log, (uint8_t *)dbs->iov.iov[i].iov_base, len);
+        }
+        qemu_fflush(dbs->bs->log);
+    }
+
     dma_bdrv_unmap(dbs);
     if (dbs->common.cb) {
         dbs->common.cb(dbs->common.opaque, ret);
@@ -167,6 +181,18 @@ static void dma_bdrv_cb(void *opaque, int ret)
     if (dbs->iov.size == 0) {
         trace_dma_map_wait(dbs);
         cpu_register_map_client(dbs, continue_after_map_failure);
+        return;
+    }
+
+    if (rr_mode == KVM_REPLAY && dbs->dir == DMA_DIRECTION_FROM_DEVICE) {
+        size_t len;
+        int i;
+        for (i = 0; i < dbs->iov.niov; ++i) {
+            qemu_get_buffer(dbs->bs->log, (uint8_t *)&len, sizeof len);
+            qemu_get_buffer(dbs->bs->log, (uint8_t *)dbs->iov.iov[i].iov_base, len);
+            dbs->iov.iov[i].iov_len = len;
+        }
+        dma_complete(dbs, ret);
         return;
     }
 

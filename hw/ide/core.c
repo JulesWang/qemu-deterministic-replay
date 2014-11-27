@@ -32,9 +32,12 @@
 #include "sysemu/dma.h"
 #include "hw/block/block.h"
 #include "sysemu/blockdev.h"
+#include "block/block_int.h"
+#include "linux/kvm.h"
 
 #include <hw/ide/internal.h>
 
+extern int rr_mode;
 /* These values were based on a Seagate ST3500418AS but have been modified
    to make more sense in QEMU */
 static const int smart_attributes[][12] = {
@@ -1743,6 +1746,11 @@ void ide_exec_cmd(IDEBus *bus, uint32_t val)
     if (s != bus->ifs && !s->bs)
         return;
 
+    if (rr_mode == KVM_REPLAY) {
+        s->status &= ~BUSY_STAT;
+        s->status &= ~DRQ_STAT;
+    }
+
     /* Only DEVICE RESET is allowed while BSY or/and DRQ are set */
     if ((s->status & (BUSY_STAT|DRQ_STAT)) && val != WIN_DEVICE_RESET)
         return;
@@ -2174,6 +2182,13 @@ int ide_init_drive(IDEState *s, BlockDriverState *bs, IDEDriveKind kind,
 
     ide_reset(s);
     bdrv_iostatus_enable(bs);
+
+    if (rr_mode == KVM_RECORD) {
+        bs->log = qemu_fopen("ide.log", "wb");
+    } else if (rr_mode == KVM_REPLAY) {
+        bs->log = qemu_fopen("ide.log", "rb");
+    }
+
     return 0;
 }
 

@@ -583,6 +583,14 @@ qemu-system-i386 -hda a -hdb b
 @end example
 ETEXI
 
+DEF("record", 0, QEMU_OPTION_record,
+    "-record  record vm into log\n",
+    QEMU_ARCH_ALL)
+
+DEF("replay", 0, QEMU_OPTION_replay,
+    "-replay  replay vm from logs\n",
+    QEMU_ARCH_ALL)
+
 DEF("mtdblock", HAS_ARG, QEMU_OPTION_mtdblock,
     "-mtdblock file  use 'file' as on-board Flash memory image\n",
     QEMU_ARCH_ALL)

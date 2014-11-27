@@ -393,6 +393,8 @@ struct BlockDriverState {
 
     /* The error object in use for blocking operations on backing_hd */
     Error *backing_blocker;
+
+    QEMUFile *log;
 };
 
 int get_tmp_filename(char *filename, int size);
